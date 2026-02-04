@@ -17,10 +17,14 @@ class TestLoadEnv:
         env_file = tmp_path / ".env"
         env_file.write_text("TEST_VAR=test_value\n")
 
-        result = load_env(env_file)
+        with patch.dict(os.environ, {}, clear=False):
+            result = load_env(env_file)
 
-        assert result is True
-        assert os.environ.get("TEST_VAR") == "test_value"
+            assert result is True
+            assert os.environ.get("TEST_VAR") == "test_value"
+
+        # Verify cleanup - var should not persist
+        assert "TEST_VAR" not in os.environ
 
     def test_load_env_with_nonexistent_path(self, tmp_path: Path) -> None:
         """Should return False when .env file doesn't exist."""
@@ -35,10 +39,14 @@ class TestLoadEnv:
         env_file = tmp_path / ".env"
         env_file.write_text("STRING_PATH_VAR=value\n")
 
-        result = load_env(str(env_file))
+        with patch.dict(os.environ, {}, clear=False):
+            result = load_env(str(env_file))
 
-        assert result is True
-        assert os.environ.get("STRING_PATH_VAR") == "value"
+            assert result is True
+            assert os.environ.get("STRING_PATH_VAR") == "value"
+
+        # Verify cleanup
+        assert "STRING_PATH_VAR" not in os.environ
 
 
 class TestExpandEnvVars:
