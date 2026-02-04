@@ -1,0 +1,23 @@
+# PDF Redaction Patterns Configuration
+#
+# This file defines custom patterns for redacting PII from PDFs.
+# Environment variables can be referenced using ${VAR} syntax.
+#
+# Pattern structure:
+#   pattern_name:
+#     regex: "regex pattern or ${ENV_VAR}"
+#     description: "Human-readable description"
+#     enabled: true  # optional, defaults to true
+#
+# Usage:
+#   1. Copy .env.example to .env and fill in your personal values
+#   2. Run: redact input.pdf --config config/patterns.yaml
+
+patterns:
+  full_name:
+    regex: "${REDACT_FULL_NAME}"
+    description: "Account holder name"
+
+  address:
+    regex: "${REDACT_ADDRESS}"
+    description: "Home address"
