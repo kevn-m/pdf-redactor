@@ -305,3 +305,145 @@ class TestGarbageCollection:
         # Read raw bytes and verify original text is gone
         output_bytes = output_path.read_bytes()
         assert b"12345678" not in output_bytes
+
+
+class TestBatchProcessingIntegration:
+    """Integration tests for batch processing functionality."""
+
+    @pytest.fixture
+    def batch_folder(self, tmp_path: Path) -> Path:
+        """Create folder with multiple test PDFs containing various PII."""
+        folder = tmp_path / "statements"
+        folder.mkdir()
+
+        # Create PDFs with different PII types
+        test_data = [
+            ("statement1.pdf", "Email: user1@example.com\nAccount: 123456789"),
+            ("statement2.pdf", "BSB: 123-456\nPhone: 0412 345 678"),
+            ("statement3.pdf", "TFN: 123 456 789\nCard: 1234-5678-9012-3456"),
+        ]
+
+        for filename, content in test_data:
+            pdf_path = folder / filename
+            doc = pymupdf.open()
+            page = doc.new_page()
+            for i, line in enumerate(content.split("\n")):
+                page.insert_text((50, 50 + i * 30), line)
+            doc.save(pdf_path)
+            doc.close()
+
+        return folder
+
+    def test_batch_full_workflow(self, runner: CliRunner, batch_folder: Path) -> None:
+        """Batch mode should process all PDFs and redact PII."""
+        result = runner.invoke(main, [str(batch_folder)])
+
+        assert result.exit_code == 0
+
+        redacted_dir = batch_folder / "redacted"
+        assert redacted_dir.exists()
+
+        # Verify each file was redacted
+        for original_name in ["statement1", "statement2", "statement3"]:
+            output_path = redacted_dir / f"{original_name}_redacted.pdf"
+            assert output_path.exists()
+
+            with pymupdf.open(output_path) as doc:
+                text = doc[0].get_text()
+                # Verify PII is redacted
+                assert "@example.com" not in text
+                assert "123456789" not in text
+                assert "123-456" not in text
+                assert "0412 345 678" not in text
+                assert "1234-5678-9012-3456" not in text
+
+    def test_batch_with_output_dir(
+        self, runner: CliRunner, batch_folder: Path, tmp_path: Path
+    ) -> None:
+        """Batch mode should use custom output directory when specified."""
+        custom_output = tmp_path / "custom_redacted"
+
+        result = runner.invoke(
+            main, [str(batch_folder), "--output-dir", str(custom_output)]
+        )
+
+        assert result.exit_code == 0
+        assert custom_output.exists()
+
+        # Verify files are in custom directory
+        assert (custom_output / "statement1_redacted.pdf").exists()
+        assert (custom_output / "statement2_redacted.pdf").exists()
+        assert (custom_output / "statement3_redacted.pdf").exists()
+
+        # Verify default redacted directory was NOT created
+        assert not (batch_folder / "redacted").exists()
+
+    def test_batch_verbose_output(
+        self, runner: CliRunner, batch_folder: Path
+    ) -> None:
+        """Batch mode with --verbose should show per-file progress."""
+        result = runner.invoke(main, [str(batch_folder), "--verbose"])
+
+        assert result.exit_code == 0
+
+        # Should show processing of each file
+        assert "statement1" in result.output
+        assert "statement2" in result.output
+        assert "statement3" in result.output
+
+        # Should show batch summary
+        assert "3" in result.output  # Number of files
+        assert "Processed" in result.output
+
+    def test_batch_with_strip_images(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Batch mode should respect --strip-images flag."""
+        folder = tmp_path / "with_images"
+        folder.mkdir()
+
+        # Create PDF with image
+        pdf_path = folder / "with_image.pdf"
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "Some text")
+        img = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), 1)
+        page.insert_image(pymupdf.Rect(50, 100, 100, 150), pixmap=img)
+        doc.save(pdf_path)
+        doc.close()
+
+        result = runner.invoke(main, [str(folder), "--strip-images"])
+
+        assert result.exit_code == 0
+
+        output_path = folder / "redacted" / "with_image_redacted.pdf"
+        with pymupdf.open(output_path) as doc:
+            assert len(doc[0].get_images()) == 0
+
+    def test_batch_env_var_patterns(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Batch mode should apply env var patterns to all files."""
+        folder = tmp_path / "with_names"
+        folder.mkdir()
+
+        for i, name in enumerate(["Alice Smith", "Bob Jones"]):
+            pdf_path = folder / f"doc{i + 1}.pdf"
+            doc = pymupdf.open()
+            page = doc.new_page()
+            page.insert_text((50, 50), f"Customer: {name}")
+            doc.save(pdf_path)
+            doc.close()
+
+        with patch.dict("os.environ", {"REDACT_NAME1": "Alice Smith", "REDACT_NAME2": "Bob Jones"}):
+            result = runner.invoke(main, [str(folder)])
+
+        assert result.exit_code == 0
+
+        # Verify names are redacted
+        for i in range(1, 3):
+            output_path = folder / "redacted" / f"doc{i}_redacted.pdf"
+            with pymupdf.open(output_path) as doc:
+                text = doc[0].get_text()
+                assert "Alice Smith" not in text
+                assert "Bob Jones" not in text

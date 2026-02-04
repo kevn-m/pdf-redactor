@@ -7,7 +7,13 @@ import pymupdf
 import pytest
 from click.testing import CliRunner
 
-from redact.cli import get_default_output, list_patterns, main
+from redact.cli import (
+    find_pdf_files,
+    get_batch_output_dir,
+    get_default_output,
+    list_patterns,
+    main,
+)
 
 
 class TestGetDefaultOutput:
@@ -320,3 +326,181 @@ class TestOutputMessages:
         assert result.exit_code == 0
         # Should show some indication of what was redacted
         assert "email" in result.output.lower() or "1" in result.output
+
+
+class TestFindPdfFiles:
+    """Tests for find_pdf_files function."""
+
+    def test_returns_sorted_pdfs(self, tmp_path):
+        """Should return PDF files sorted alphabetically."""
+        # Create PDFs in non-alphabetical order
+        (tmp_path / "charlie.pdf").touch()
+        (tmp_path / "alpha.pdf").touch()
+        (tmp_path / "bravo.pdf").touch()
+
+        result = find_pdf_files(tmp_path)
+
+        assert len(result) == 3
+        assert result[0].name == "alpha.pdf"
+        assert result[1].name == "bravo.pdf"
+        assert result[2].name == "charlie.pdf"
+
+    def test_empty_directory(self, tmp_path):
+        """Should return empty list for directory with no PDFs."""
+        result = find_pdf_files(tmp_path)
+        assert result == []
+
+    def test_ignores_non_pdf_files(self, tmp_path):
+        """Should only return .pdf files."""
+        (tmp_path / "document.pdf").touch()
+        (tmp_path / "image.png").touch()
+        (tmp_path / "text.txt").touch()
+
+        result = find_pdf_files(tmp_path)
+
+        assert len(result) == 1
+        assert result[0].name == "document.pdf"
+
+    def test_non_recursive(self, tmp_path):
+        """Should not search subdirectories."""
+        (tmp_path / "top.pdf").touch()
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        (subdir / "nested.pdf").touch()
+
+        result = find_pdf_files(tmp_path)
+
+        assert len(result) == 1
+        assert result[0].name == "top.pdf"
+
+    def test_case_insensitive_extension(self, tmp_path):
+        """Should match .PDF and .pdf extensions."""
+        (tmp_path / "lower.pdf").touch()
+        (tmp_path / "upper.PDF").touch()
+
+        result = find_pdf_files(tmp_path)
+
+        assert len(result) == 2
+
+
+class TestGetBatchOutputDir:
+    """Tests for get_batch_output_dir function."""
+
+    def test_default_returns_redacted_subdir(self, tmp_path):
+        """Should return <input>/redacted/ when no custom dir specified."""
+        result = get_batch_output_dir(tmp_path)
+        assert result == tmp_path / "redacted"
+
+    def test_custom_output_dir(self, tmp_path):
+        """Should return custom directory when specified."""
+        custom_dir = tmp_path / "custom_output"
+        result = get_batch_output_dir(tmp_path, custom_dir)
+        assert result == custom_dir
+
+    def test_accepts_string_path(self, tmp_path):
+        """Should accept string paths."""
+        result = get_batch_output_dir(tmp_path, "/custom/path")
+        assert result == Path("/custom/path")
+
+
+class TestBatchProcessing:
+    """Tests for batch processing CLI functionality."""
+
+    @pytest.fixture
+    def runner(self):
+        """CLI test runner."""
+        return CliRunner()
+
+    @pytest.fixture
+    def batch_folder(self, tmp_path):
+        """Create folder with multiple test PDFs."""
+        folder = tmp_path / "statements"
+        folder.mkdir()
+
+        for name in ["statement1", "statement2", "statement3"]:
+            pdf_path = folder / f"{name}.pdf"
+            doc = pymupdf.open()
+            page = doc.new_page()
+            page.insert_text((50, 50), f"Email: {name}@example.com")
+            page.insert_text((50, 100), "Account: 123456789")
+            doc.save(pdf_path)
+            doc.close()
+
+        return folder
+
+    def test_batch_creates_redacted_directory(self, runner, batch_folder):
+        """Batch mode should create redacted/ subdirectory."""
+        result = runner.invoke(main, [str(batch_folder)])
+
+        assert result.exit_code == 0
+        redacted_dir = batch_folder / "redacted"
+        assert redacted_dir.exists()
+        assert redacted_dir.is_dir()
+
+    def test_batch_processes_all_pdfs(self, runner, batch_folder):
+        """Batch mode should process all PDFs in folder."""
+        result = runner.invoke(main, [str(batch_folder)])
+
+        assert result.exit_code == 0
+        redacted_dir = batch_folder / "redacted"
+
+        expected_files = [
+            "statement1_redacted.pdf",
+            "statement2_redacted.pdf",
+            "statement3_redacted.pdf",
+        ]
+        for filename in expected_files:
+            assert (redacted_dir / filename).exists()
+
+    def test_batch_with_custom_output_dir(self, runner, batch_folder, tmp_path):
+        """--output-dir should place files in custom directory."""
+        custom_output = tmp_path / "custom_output"
+
+        result = runner.invoke(
+            main, [str(batch_folder), "--output-dir", str(custom_output)]
+        )
+
+        assert result.exit_code == 0
+        assert custom_output.exists()
+        assert (custom_output / "statement1_redacted.pdf").exists()
+
+    def test_batch_empty_folder_error(self, runner, tmp_path):
+        """Should error when folder contains no PDFs."""
+        empty_folder = tmp_path / "empty"
+        empty_folder.mkdir()
+
+        result = runner.invoke(main, [str(empty_folder)])
+
+        assert result.exit_code != 0
+        assert "no pdf" in result.output.lower()
+
+    def test_batch_verbose_shows_progress(self, runner, batch_folder):
+        """Verbose mode should show per-file progress."""
+        result = runner.invoke(main, [str(batch_folder), "--verbose"])
+
+        assert result.exit_code == 0
+        assert "statement1" in result.output
+        assert "statement2" in result.output
+        assert "statement3" in result.output
+
+    def test_batch_shows_summary(self, runner, batch_folder):
+        """Should show summary after batch processing."""
+        result = runner.invoke(main, [str(batch_folder)])
+
+        assert result.exit_code == 0
+        # Should mention number of files processed
+        assert "3" in result.output or "files" in result.output.lower()
+
+    def test_batch_with_strip_images(self, runner, batch_folder):
+        """Batch mode should respect --strip-images flag."""
+        result = runner.invoke(main, [str(batch_folder), "--strip-images"])
+        assert result.exit_code == 0
+
+    def test_batch_output_dir_short_option(self, runner, batch_folder, tmp_path):
+        """-o should work as shorthand for --output-dir."""
+        custom_output = tmp_path / "short_output"
+
+        result = runner.invoke(main, [str(batch_folder), "-o", str(custom_output)])
+
+        assert result.exit_code == 0
+        assert custom_output.exists()

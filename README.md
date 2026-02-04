@@ -5,6 +5,7 @@ A command-line tool to securely redact PII (Personally Identifiable Information)
 ## Features
 
 - **True redaction** - Text is removed from PDF structure, not just visually obscured
+- **Batch processing** - Process entire folders of PDFs at once
 - **Built-in patterns** - Australian PII patterns (BSB, TFN, phone numbers, etc.)
 - **Custom patterns** - Define your own via YAML config or environment variables
 - **Metadata stripping** - Removes PDF and XMP metadata by default
@@ -29,10 +30,13 @@ pip install -e .
 ## Quick Start
 
 ```bash
-# Redact a PDF with all built-in patterns
+# Redact a single PDF with all built-in patterns
 uv run redact statement.pdf
-
 # Output: statement_redacted.pdf
+
+# Batch process all PDFs in a folder
+uv run redact ./statements/
+# Output: ./statements/redacted/statement1_redacted.pdf, etc.
 
 # Specify output path (parent directories created automatically)
 uv run redact statement.pdf redacted/clean.pdf
@@ -63,12 +67,16 @@ uv run redact --list-patterns
 ## CLI Options
 
 ```
-Usage: redact [OPTIONS] INPUT_FILE [OUTPUT_FILE]
+Usage: redact [OPTIONS] INPUT [OUTPUT]
+
+  INPUT can be a PDF file or a directory containing PDFs.
+  For directories, all PDFs are processed (non-recursive).
 
 Options:
   -p, --pattern TEXT     Use specific built-in pattern (repeatable)
   -c, --config PATH      Load patterns from YAML config file
   -a, --all-patterns     Use all built-in patterns (default if none specified)
+  -o, --output-dir PATH  Output directory for batch processing
   -I, --strip-images     Remove all images (barcodes, logos, etc.)
   -M, --no-metadata      Skip metadata stripping
   -v, --verbose          Show detailed output
@@ -150,6 +158,28 @@ uv run redact statement.pdf -c my-patterns.yaml
 uv run redact statement.pdf -p email -c my-patterns.yaml
 ```
 
+### Batch Processing
+
+```bash
+# Process all PDFs in a folder
+uv run redact ./statements/
+# Output: ./statements/redacted/statement1_redacted.pdf, etc.
+
+# Custom output directory
+uv run redact ./statements/ -o ./redacted-statements/
+
+# Batch with flags
+uv run redact ./statements/ --strip-images -v
+
+# Verbose shows per-file progress
+uv run redact ./statements/ -v
+# Processing: statement1.pdf
+#   → 5 redaction(s)
+# Processing: statement2.pdf
+#   → 3 redaction(s)
+# Processed 2/2 file(s): 8 redaction(s) across 4 page(s)
+```
+
 ### Output Options
 
 ```bash
@@ -222,7 +252,7 @@ tests/
 
 - **Text-based PDFs only**: Does not support OCR for scanned documents (planned for future)
 - **Password-protected PDFs**: Not currently supported (planned for future)
-- **Single file processing**: Batch processing not yet implemented
+- **Non-recursive batch**: Batch mode only processes PDFs in the immediate folder, not subdirectories
 
 ## License
 
