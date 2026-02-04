@@ -223,6 +223,35 @@ patterns:
         assert result.exit_code != 0
         assert "same as input" in result.output.lower()
 
+    def test_creates_output_parent_directories(self, runner, sample_pdf, tmp_path):
+        """Should create parent directories for output path."""
+        output_path = tmp_path / "nested" / "dirs" / "output.pdf"
+        result = runner.invoke(main, [str(sample_pdf), str(output_path)])
+        assert result.exit_code == 0
+        assert output_path.exists()
+
+    def test_strip_images_option(self, runner, tmp_path):
+        """--strip-images should remove all images from PDF."""
+        # Create PDF with image
+        input_pdf = tmp_path / "with_image.pdf"
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "Text content")
+        img = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), 1)
+        page.insert_image(pymupdf.Rect(50, 100, 100, 150), pixmap=img)
+        doc.save(input_pdf)
+        doc.close()
+
+        output_pdf = tmp_path / "output.pdf"
+        result = runner.invoke(main, [str(input_pdf), str(output_pdf), "--strip-images"])
+
+        assert result.exit_code == 0
+        assert "image" in result.output.lower()
+
+        # Verify image removed
+        with pymupdf.open(output_pdf) as doc:
+            assert len(doc[0].get_images()) == 0
+
 
 class TestEnvVarPatterns:
     """Tests for REDACT_* environment variable patterns."""

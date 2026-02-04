@@ -96,6 +96,12 @@ def setup_logging(verbose: bool, quiet: bool) -> None:
     help="Skip metadata stripping.",
 )
 @click.option(
+    "-I",
+    "--strip-images",
+    is_flag=True,
+    help="Remove all images (barcodes, logos, etc.).",
+)
+@click.option(
     "-v",
     "--verbose",
     is_flag=True,
@@ -122,6 +128,7 @@ def main(
     config_path: str | None,
     all_patterns: bool,
     no_metadata: bool,
+    strip_images: bool,
     verbose: bool,
     quiet: bool,
     list_patterns_flag: bool,
@@ -152,12 +159,18 @@ def main(
     # Build pattern list
     active_patterns: list[Pattern] = []
 
-    # Validate and add explicit patterns
+    # Add all built-in patterns if --all-patterns flag is set
+    if all_patterns:
+        active_patterns.extend(get_builtin_patterns())
+
+    # Validate and add explicit patterns (in addition to --all-patterns)
     if patterns:
         invalid = [p for p in patterns if p not in BUILTIN_PATTERNS]
         if invalid:
             raise click.UsageError(f"Unknown pattern(s): {', '.join(invalid)}")
-        active_patterns.extend(get_builtin_patterns(list(patterns)))
+        # Only add if not already included via --all-patterns
+        if not all_patterns:
+            active_patterns.extend(get_builtin_patterns(list(patterns)))
 
     # Load from config file
     if config_path:
@@ -182,9 +195,10 @@ def main(
                 )
             )
 
-    # Default to all patterns if none specified via -p, -c, or env vars
-    if not active_patterns:
-        active_patterns = get_builtin_patterns()
+    # Default to all built-in patterns if none specified via -p, -c, or -a
+    # (env vars alone don't count - user must explicitly choose patterns)
+    if not all_patterns and not patterns and not config_path:
+        active_patterns = get_builtin_patterns() + active_patterns
 
     # Compile patterns
     try:
@@ -202,6 +216,9 @@ def main(
     else:
         output_path = get_default_output(input_path)
 
+    # Create parent directories if needed
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Prevent overwriting input file
     if output_path.resolve() == input_path.resolve():
         raise click.UsageError(
@@ -215,6 +232,7 @@ def main(
         click.echo(f"Output: {output_path}")
         click.echo(f"Patterns: {[name for name, _ in compiled]}")
         click.echo(f"Strip metadata: {not no_metadata}")
+        click.echo(f"Strip images: {strip_images}")
         click.echo("")
 
     # Perform redaction
@@ -224,13 +242,17 @@ def main(
             output_path=output_path,
             patterns=compiled,
             strip_meta=not no_metadata,
+            strip_images=strip_images,
         )
     except RedactionError as e:
         raise click.ClickException(str(e)) from e
 
     # Output results
     if not quiet:
-        click.echo(f"Redacted {result.total_redactions} item(s) across {result.pages_processed} page(s)")
+        msg = f"Redacted {result.total_redactions} item(s) across {result.pages_processed} page(s)"
+        if result.images_removed > 0:
+            msg += f", removed {result.images_removed} image(s)"
+        click.echo(msg)
         click.echo(f"Output saved to: {output_path}")
 
     if verbose and result.redactions_by_pattern:

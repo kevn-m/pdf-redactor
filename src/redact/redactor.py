@@ -23,6 +23,39 @@ class RedactionResult:
     pages_processed: int = 0
     total_redactions: int = 0
     redactions_by_pattern: dict[str, int] = field(default_factory=dict)
+    images_removed: int = 0
+
+
+def strip_images_from_page(page: pymupdf.Page) -> int:
+    """Remove all images from a page.
+
+    Args:
+        page: PyMuPDF page object.
+
+    Returns:
+        Number of images removed.
+    """
+    images = page.get_images(full=True)
+    if not images:
+        return 0
+
+    # Get bounding boxes for all images and redact them
+    for img in images:
+        xref = img[0]
+        # Get all instances of this image on the page
+        for img_info in page.get_image_info(xrefs=True):
+            if img_info.get("xref") == xref:
+                bbox = pymupdf.Rect(img_info["bbox"])
+                page.add_redact_annot(bbox, fill=(1, 1, 1))  # White fill
+
+    # Apply redactions to remove images
+    if images:
+        page.apply_redactions(
+            images=pymupdf.PDF_REDACT_IMAGE_REMOVE,
+            graphics=0,
+        )
+
+    return len(images)
 
 
 def redact_page(
@@ -77,17 +110,20 @@ def redact_document(
     output_path: str | Path,
     patterns: list[tuple[str, "CompiledPattern[str]"]],
     strip_meta: bool = True,
+    strip_images: bool = False,
 ) -> RedactionResult:
     """Redact a PDF document and save to output path.
 
     Processes all pages, applies pattern-based redactions, optionally strips
-    metadata, and saves with garbage collection to remove unreferenced objects.
+    metadata and images, and saves with garbage collection to remove
+    unreferenced objects.
 
     Args:
         input_path: Path to input PDF file.
         output_path: Path to save redacted PDF.
         patterns: List of (pattern_name, compiled_regex) tuples.
         strip_meta: Whether to strip PDF metadata (default True).
+        strip_images: Whether to remove all images (default False).
 
     Returns:
         RedactionResult with aggregated counts across all pages.
@@ -104,11 +140,16 @@ def redact_document(
     # Aggregate results
     total_pages = 0
     total_redactions = 0
+    total_images_removed = 0
     redactions_by_pattern: dict[str, int] = {}
 
     try:
         with pymupdf.open(input_path) as doc:
             for page in doc:
+                # Strip images first if requested
+                if strip_images:
+                    total_images_removed += strip_images_from_page(page)
+
                 page_result = redact_page(page, patterns)
                 total_pages += 1
                 total_redactions += page_result.total_redactions
@@ -133,4 +174,5 @@ def redact_document(
         pages_processed=total_pages,
         total_redactions=total_redactions,
         redactions_by_pattern=redactions_by_pattern,
+        images_removed=total_images_removed,
     )

@@ -12,6 +12,7 @@ from redact.redactor import (
     RedactionResult,
     redact_document,
     redact_page,
+    strip_images_from_page,
 )
 
 
@@ -463,3 +464,120 @@ class TestRedactPageIntegration:
 
             assert "+61 412 345 678" not in page.get_text()
             assert result.total_redactions == 1
+
+
+class TestStripImagesFromPage:
+    """Tests for strip_images_from_page function."""
+
+    def test_removes_image_from_page(self) -> None:
+        """Should remove images from page."""
+        with pdf_doc() as doc:
+            page = doc.new_page()
+            # Insert a simple image
+            img = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), 1)
+            page.insert_image(pymupdf.Rect(50, 50, 100, 100), pixmap=img)
+
+            # Verify image exists
+            assert len(page.get_images()) == 1
+
+            count = strip_images_from_page(page)
+
+            assert count == 1
+
+    def test_returns_zero_when_no_images(self) -> None:
+        """Should return 0 when page has no images."""
+        with pdf_doc() as doc:
+            page = doc.new_page()
+            page.insert_text((50, 50), "Text only, no images")
+
+            count = strip_images_from_page(page)
+
+            assert count == 0
+
+    def test_removes_multiple_images(self) -> None:
+        """Should remove all images from page."""
+        with pdf_doc() as doc:
+            page = doc.new_page()
+            # Insert multiple images
+            img = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), 1)
+            page.insert_image(pymupdf.Rect(50, 50, 100, 100), pixmap=img)
+            page.insert_image(pymupdf.Rect(150, 50, 200, 100), pixmap=img)
+
+            assert len(page.get_images()) == 2
+
+            count = strip_images_from_page(page)
+
+            assert count == 2
+
+
+class TestRedactDocumentWithImages:
+    """Tests for redact_document with strip_images option."""
+
+    def test_strip_images_removes_all_images(self, tmp_path: Path) -> None:
+        """Should remove all images when strip_images=True."""
+        input_pdf = tmp_path / "input.pdf"
+        output_pdf = tmp_path / "output.pdf"
+
+        # Create PDF with image
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "Some text")
+        img = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), 1)
+        page.insert_image(pymupdf.Rect(50, 100, 100, 150), pixmap=img)
+        doc.save(input_pdf)
+        doc.close()
+
+        result = redact_document(input_pdf, output_pdf, [], strip_images=True)
+
+        assert result.images_removed == 1
+
+        # Verify image is gone in output
+        with pymupdf.open(output_pdf) as doc:
+            assert len(doc[0].get_images()) == 0
+
+    def test_preserves_images_by_default(self, tmp_path: Path) -> None:
+        """Should preserve images when strip_images=False (default)."""
+        input_pdf = tmp_path / "input.pdf"
+        output_pdf = tmp_path / "output.pdf"
+
+        # Create PDF with image
+        doc = pymupdf.open()
+        page = doc.new_page()
+        img = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), 1)
+        page.insert_image(pymupdf.Rect(50, 50, 100, 100), pixmap=img)
+        doc.save(input_pdf)
+        doc.close()
+
+        result = redact_document(input_pdf, output_pdf, [])
+
+        assert result.images_removed == 0
+
+        # Verify image still exists in output
+        with pymupdf.open(output_pdf) as doc:
+            assert len(doc[0].get_images()) == 1
+
+    def test_strip_images_with_text_redaction(self, tmp_path: Path) -> None:
+        """Should handle both image stripping and text redaction."""
+        input_pdf = tmp_path / "input.pdf"
+        output_pdf = tmp_path / "output.pdf"
+
+        # Create PDF with image and text
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "Email: test@example.com")
+        img = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), 1)
+        page.insert_image(pymupdf.Rect(50, 100, 100, 150), pixmap=img)
+        doc.save(input_pdf)
+        doc.close()
+
+        patterns = [("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"))]
+
+        result = redact_document(input_pdf, output_pdf, patterns, strip_images=True)
+
+        assert result.images_removed == 1
+        assert result.total_redactions == 1
+
+        # Verify both image gone and text redacted
+        with pymupdf.open(output_pdf) as doc:
+            assert len(doc[0].get_images()) == 0
+            assert "test@example.com" not in doc[0].get_text()
