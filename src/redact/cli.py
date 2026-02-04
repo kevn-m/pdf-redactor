@@ -9,12 +9,13 @@ import click
 from redact import __version__
 from redact.patterns import (
     BUILTIN_PATTERNS,
+    CompiledPatterns,
     Pattern,
     compile_patterns,
     get_builtin_patterns,
     load_yaml_patterns,
 )
-from redact.redactor import RedactionError, redact_document
+from redact.redactor import RedactionError, RedactionResult, redact_document
 from redact.secrets import get_redact_vars, load_env
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,39 @@ def setup_logging(verbose: bool, quiet: bool) -> None:
     )
 
 
+def _redact_file(
+    input_path: Path,
+    output_path: Path,
+    patterns: CompiledPatterns,
+    strip_meta: bool,
+    strip_images: bool,
+) -> RedactionResult:
+    """Perform redaction on a single PDF file.
+
+    This is the core redaction logic used by both single-file and batch processing.
+
+    Args:
+        input_path: Path to input PDF.
+        output_path: Path for output PDF.
+        patterns: Compiled pattern list from compile_patterns().
+        strip_meta: Whether to strip PDF metadata.
+        strip_images: Whether to remove all images.
+
+    Returns:
+        RedactionResult with redaction statistics.
+
+    Raises:
+        RedactionError: If redaction fails.
+    """
+    return redact_document(
+        input_path=input_path,
+        output_path=output_path,
+        patterns=patterns,
+        strip_meta=strip_meta,
+        strip_images=strip_images,
+    )
+
+
 def _process_single_file(
     input_path: Path,
     output_file: str | None,
@@ -145,7 +179,7 @@ def _process_single_file(
 
     # Perform redaction
     try:
-        result = redact_document(
+        result = _redact_file(
             input_path=input_path,
             output_path=output_path,
             patterns=compiled,
@@ -210,7 +244,7 @@ def _process_batch(
             click.echo(f"Processing: {pdf_path.name}")
 
         try:
-            result = redact_document(
+            result = _redact_file(
                 input_path=pdf_path,
                 output_path=output_path,
                 patterns=compiled,

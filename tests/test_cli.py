@@ -8,12 +8,122 @@ import pytest
 from click.testing import CliRunner
 
 from redact.cli import (
+    _redact_file,
     find_pdf_files,
     get_batch_output_dir,
     get_default_output,
     list_patterns,
     main,
 )
+from redact.patterns import compile_patterns, get_builtin_patterns
+
+
+class TestRedactFile:
+    """Tests for _redact_file helper function."""
+
+    @pytest.fixture
+    def sample_pdf(self, tmp_path):
+        """Create a sample PDF with test content."""
+        pdf_path = tmp_path / "test.pdf"
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "Email: test@example.com")
+        page.insert_text((50, 100), "Account 123456789")
+        doc.save(pdf_path)
+        doc.close()
+        return pdf_path
+
+    @pytest.fixture
+    def compiled_patterns(self):
+        """Compile all built-in patterns."""
+        return compile_patterns(get_builtin_patterns())
+
+    def test_redacts_file_and_returns_result(self, sample_pdf, tmp_path, compiled_patterns):
+        """Should redact file and return RedactionResult."""
+        output_path = tmp_path / "output.pdf"
+
+        result = _redact_file(
+            input_path=sample_pdf,
+            output_path=output_path,
+            patterns=compiled_patterns,
+            strip_meta=True,
+            strip_images=False,
+        )
+
+        assert output_path.exists()
+        assert result.pages_processed == 1
+        assert result.total_redactions > 0
+
+    def test_creates_output_file(self, sample_pdf, tmp_path, compiled_patterns):
+        """Should create output file at specified path."""
+        output_path = tmp_path / "redacted_output.pdf"
+
+        _redact_file(
+            input_path=sample_pdf,
+            output_path=output_path,
+            patterns=compiled_patterns,
+            strip_meta=True,
+            strip_images=False,
+        )
+
+        assert output_path.exists()
+
+    def test_respects_strip_meta_flag(self, sample_pdf, tmp_path, compiled_patterns):
+        """Should strip metadata when strip_meta=True."""
+        output_path = tmp_path / "output.pdf"
+
+        _redact_file(
+            input_path=sample_pdf,
+            output_path=output_path,
+            patterns=compiled_patterns,
+            strip_meta=True,
+            strip_images=False,
+        )
+
+        with pymupdf.open(output_path) as doc:
+            # Metadata should be cleared
+            assert not doc.metadata.get("author")
+
+    def test_respects_strip_images_flag(self, tmp_path, compiled_patterns):
+        """Should strip images when strip_images=True."""
+        # Create PDF with image
+        input_pdf = tmp_path / "with_image.pdf"
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "Text content")
+        img = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), 1)
+        page.insert_image(pymupdf.Rect(50, 100, 100, 150), pixmap=img)
+        doc.save(input_pdf)
+        doc.close()
+
+        output_path = tmp_path / "output.pdf"
+
+        result = _redact_file(
+            input_path=input_pdf,
+            output_path=output_path,
+            patterns=compiled_patterns,
+            strip_meta=True,
+            strip_images=True,
+        )
+
+        assert result.images_removed > 0
+        with pymupdf.open(output_path) as doc:
+            assert len(doc[0].get_images()) == 0
+
+    def test_raises_redaction_error_on_invalid_pdf(self, tmp_path, compiled_patterns):
+        """Should raise RedactionError for invalid PDF."""
+        invalid_pdf = tmp_path / "invalid.pdf"
+        invalid_pdf.write_text("not a pdf")
+        output_path = tmp_path / "output.pdf"
+
+        with pytest.raises(Exception):  # RedactionError wrapped
+            _redact_file(
+                input_path=invalid_pdf,
+                output_path=output_path,
+                patterns=compiled_patterns,
+                strip_meta=True,
+                strip_images=False,
+            )
 
 
 class TestGetDefaultOutput:

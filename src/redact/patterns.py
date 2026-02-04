@@ -12,6 +12,9 @@ from redact.secrets import expand_env_vars
 if TYPE_CHECKING:
     from re import Pattern as CompiledPattern
 
+# Type alias for compiled patterns returned by compile_patterns()
+CompiledPatterns = list[tuple[str, "CompiledPattern[str]"]]
+
 
 @dataclass
 class Pattern:
@@ -126,7 +129,7 @@ def load_yaml_patterns(path: str | Path) -> list[Pattern]:
 
 def compile_patterns(
     patterns: list[Pattern],
-) -> list[tuple[str, "CompiledPattern[str]"]]:
+) -> CompiledPatterns:
     """Compile Pattern instances into regex objects.
 
     Args:
