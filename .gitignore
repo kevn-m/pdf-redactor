@@ -6,3 +6,7 @@ dist/
 *.egg-info/
 .pytest_cache/
 .coverage
+.claude/*
+/patterns.yaml
+/.env.bak
+/CLAUDE.md
